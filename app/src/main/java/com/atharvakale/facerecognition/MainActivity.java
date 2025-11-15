@@ -112,7 +112,7 @@ public class MainActivity extends AppCompatActivity {
     int[] intValues;
     int inputSize= 112;  //Input size for model
     boolean isModelQuantized=false;
-    float[][] embeedings;
+//    float[][] embeedings;
     float IMAGE_MEAN = 128.0f;
     float IMAGE_STD = 128.0f;
     int OUTPUT_SIZE=192; //Output size of model
@@ -162,7 +162,7 @@ public class MainActivity extends AppCompatActivity {
                         @Override
                         public void onFaceReady(Bitmap faceBitmap) {
                             // 1️⃣ Tạo embedding từ khuôn mặt đã crop
-                            float[] embedding = getFaceEmbedding(faceBitmap);
+                            float[] embedding = extractEmbedding(faceBitmap);
 
                             if (embedding == null) {
                                 Log.e("MQTT", "Không tạo được embedding cho ảnh: " + name);
@@ -224,7 +224,7 @@ public class MainActivity extends AppCompatActivity {
                 builder.setTitle("Select Action:");
 
                 // add a checkbox list
-                String[] names= {"View Recognition List","Update Recognition List","Save Recognitions","Load Recognitions","Clear All Recognitions","Import Photo (Beta)","Hyperparameters","Developer Mode"};
+                String[] names= {"View Recognition List","Update Recognition List","Save Recognitions","Load Recognitions","Clear All Recognitions","Developer Mode"};
 
                 builder.setItems(names, new DialogInterface.OnClickListener() {
                     @Override
@@ -248,12 +248,6 @@ public class MainActivity extends AppCompatActivity {
                                 clearnameList();
                                 break;
                             case 5:
-                                loadphoto();
-                                break;
-                            case 6:
-                                testHyperparameter();
-                                break;
-                            case 7:
                                 developerMode();
                                 break;
                         }
@@ -346,43 +340,7 @@ public class MainActivity extends AppCompatActivity {
 
         cameraBind();
     }
-    private void testHyperparameter()
-    {
 
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
-        builder.setTitle("Select Hyperparameter:");
-
-        // add a checkbox list
-        String[] names= {"Maximum Nearest Neighbour Distance"};
-
-        builder.setItems(names, new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-
-                switch (which)
-                {
-                    case 0:
-//                        Toast.makeText(context, "Clicked", Toast.LENGTH_SHORT).show();
-                        hyperparameters();
-                        break;
-
-                }
-
-            }
-
-            });
-        builder.setPositiveButton("OK", new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-
-            }
-        });
-        builder.setNegativeButton("Cancel", null);
-
-        // create and show the alert dialog
-        AlertDialog dialog = builder.create();
-        dialog.show();
-    }
     private void developerMode()
     {
         if (developerMode) {
@@ -394,46 +352,66 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(context, "Developer Mode ON", Toast.LENGTH_SHORT).show();
         }
     }
-    private void addFace()
-    {
-        {
 
-            start=false;
-            AlertDialog.Builder builder = new AlertDialog.Builder(context);
-            builder.setTitle("Enter Name");
+    float[] embedding_global;
+    private void addFace() {
+        start = false;
+        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        builder.setTitle("Enter Name");
 
-                // Set up the input
-            final EditText input = new EditText(context);
+        // Set up the input
+        final EditText input = new EditText(context);
+        input.setInputType(InputType.TYPE_CLASS_TEXT);
+        builder.setView(input);
 
-            input.setInputType(InputType.TYPE_CLASS_TEXT );
-            builder.setView(input);
-
-                // Set up the buttons
-            builder.setPositiveButton("ADD", new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface dialog, int which) {
-                    //Toast.makeText(context, input.getText().toString(), Toast.LENGTH_SHORT).show();
-
-                    //Create and Initialize new object with Face embeddings and Name.
-                    SimilarityClassifier.Recognition result = new SimilarityClassifier.Recognition(
-                            "0", "", -1f);
-                    result.setExtra(embeedings);
-
-                    registered.put( input.getText().toString(),result);
-                    start=true;
-
+        // Set up the buttons
+        builder.setPositiveButton("ADD", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                String name = input.getText().toString().trim();
+                if (name.isEmpty()) {
+                    Toast.makeText(context, "Tên không được để trống!", Toast.LENGTH_SHORT).show();
+                    start = true;
+                    return;
                 }
-            });
-            builder.setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface dialog, int which) {
-                    start=true;
-                    dialog.cancel();
-                }
-            });
 
-            builder.show();
-        }
+                // === BẢO VỆ 1: Kiểm tra face_preview có ảnh không ===
+                if (face_preview.getWidth() == 0 || face_preview.getHeight() == 0) {
+                    Toast.makeText(context, "Chưa có khuôn mặt để lưu!", Toast.LENGTH_SHORT).show();
+                    start = true;
+                    return;
+                }
+
+                if (embedding_global == null) {
+                    Toast.makeText(context, "Lỗi xử lý khuôn mặt!", Toast.LENGTH_SHORT).show();
+                    start = true;
+                    return;
+                }
+
+                // Đóng gói và lưu
+                float[][] wrapped = new float[1][OUTPUT_SIZE];
+                System.arraycopy(embedding_global, 0, wrapped[0], 0, OUTPUT_SIZE);
+
+                SimilarityClassifier.Recognition result = new SimilarityClassifier.Recognition("0", name, -1f);
+                result.setExtra(wrapped);
+
+                registered.put(name, result);
+                insertToSP(registered, 2);
+
+                Toast.makeText(context, "Đã lưu khuôn mặt: " + name, Toast.LENGTH_SHORT).show();
+                start = true;
+            }
+        });
+
+        builder.setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                start = true;
+                dialog.cancel();
+            }
+        });
+
+        builder.show();
     }
     private  void clearnameList()
     {
@@ -511,46 +489,6 @@ public class MainActivity extends AppCompatActivity {
         dialog.show();
     }
     }
-    private void hyperparameters()
-    {
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
-        builder.setTitle("Euclidean Distance");
-        builder.setMessage("0.00 -> Perfect Match\n1.00 -> Default\nTurn On Developer Mode to find optimum value\n\nCurrent Value:");
-        // Set up the input
-        final EditText input = new EditText(context);
-
-        input.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
-        builder.setView(input);
-        SharedPreferences sharedPref = getSharedPreferences("Distance",Context.MODE_PRIVATE);
-        distance = sharedPref.getFloat("distance",1.00f);
-        input.setText(String.valueOf(distance));
-        // Set up the buttons
-        builder.setPositiveButton("Update", new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-                //Toast.makeText(context, input.getText().toString(), Toast.LENGTH_SHORT).show();
-
-               distance= Float.parseFloat(input.getText().toString());
-
-
-                SharedPreferences sharedPref = getSharedPreferences("Distance",Context.MODE_PRIVATE);
-                SharedPreferences.Editor editor = sharedPref.edit();
-                editor.putFloat("distance", distance);
-                editor.apply();
-
-            }
-        });
-        builder.setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-
-                dialog.cancel();
-            }
-        });
-
-        builder.show();
-    }
-
     private void displaynameListview()
     {
         AlertDialog.Builder builder = new AlertDialog.Builder(context);
@@ -587,8 +525,6 @@ public class MainActivity extends AppCompatActivity {
         AlertDialog dialog = builder.create();
         dialog.show();
     }
-
-
 
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
@@ -744,49 +680,7 @@ public class MainActivity extends AppCompatActivity {
 
         // set Face to Preview
         face_preview.setImageBitmap(bitmap);
-
-        //Create ByteBuffer to store normalized image
-
-        ByteBuffer imgData = ByteBuffer.allocateDirect(1 * inputSize * inputSize * 3 * 4);
-
-        imgData.order(ByteOrder.nativeOrder());
-
-        intValues = new int[inputSize * inputSize];
-
-        //get pixel values from Bitmap to normalize
-        bitmap.getPixels(intValues, 0, bitmap.getWidth(), 0, 0, bitmap.getWidth(), bitmap.getHeight());
-
-        imgData.rewind();
-
-        for (int i = 0; i < inputSize; ++i) {
-            for (int j = 0; j < inputSize; ++j) {
-                int pixelValue = intValues[i * inputSize + j];
-                if (isModelQuantized) {
-                    // Quantized model
-                    imgData.put((byte) ((pixelValue >> 16) & 0xFF));
-                    imgData.put((byte) ((pixelValue >> 8) & 0xFF));
-                    imgData.put((byte) (pixelValue & 0xFF));
-                } else { // Float model
-                    imgData.putFloat((((pixelValue >> 16) & 0xFF) - IMAGE_MEAN) / IMAGE_STD);
-                    imgData.putFloat((((pixelValue >> 8) & 0xFF) - IMAGE_MEAN) / IMAGE_STD);
-                    imgData.putFloat(((pixelValue & 0xFF) - IMAGE_MEAN) / IMAGE_STD);
-
-                }
-            }
-        }
-        //imgData is input to our model
-        Object[] inputArray = {imgData};
-
-        Map<Integer, Object> outputMap = new HashMap<>();
-
-
-        embeedings = new float[1][OUTPUT_SIZE]; //output of model will be stored in this variable
-
-        outputMap.put(0, embeedings);
-
-        tfLite.runForMultipleInputsOutputs(inputArray, outputMap); //Run model
-
-
+        embedding_global = extractEmbedding(bitmap);
 
         float distance_local = Float.MAX_VALUE;
         String id = "0";
@@ -794,63 +688,47 @@ public class MainActivity extends AppCompatActivity {
 
         //Compare new face with saved Faces.
         if (registered.size() > 0) {
-
             if (System.currentTimeMillis() - lastRecognizedTime > 800) {  // mỗi 0.8 giây mới nhận diện lại
                 lastRecognizedTime = System.currentTimeMillis();
-            final List<Pair<String, Float>> nearest = findNearest(embeedings[0]);//Find 2 closest matching face
+                final List<Pair<String, Float>> nearest = findNearest(embedding_global);//Find 2 closest matching face
 
-            if (nearest.get(0) != null) {
+                if (nearest.get(0) != null) {
 
-                final String name = nearest.get(0).first; //get name and distance of closest matching face
-                // label = name;
-                distance_local = nearest.get(0).second;
+                    final String name = nearest.get(0).first; //get name and distance of closest matching face
+                    // label = name;
+                    distance_local = nearest.get(0).second;
 
-                // === Thêm đoạn này ===
-                Deque<Float> recentDistances = new ArrayDeque<>();
-                recentDistances.add(distance_local);
-                if (recentDistances.size() > 5) recentDistances.poll();
+                    // === Thêm đoạn này ===
+                    Deque<Float> recentDistances = new ArrayDeque<>();
+                    recentDistances.add(distance_local);
+                    if (recentDistances.size() > 5) recentDistances.poll();
 
-                float avgDistance = 0f;
-                for (float d : recentDistances) avgDistance += d;
-                avgDistance /= recentDistances.size();
+                    float avgDistance = 0f;
+                    for (float d : recentDistances) avgDistance += d;
+                    avgDistance /= recentDistances.size();
 
-                // Dùng giá trị trung bình thay vì distance_local
-                float smoothedDistance = avgDistance;
-                // ======================
-                if (developerMode) {
-                    if (smoothedDistance < distance)
-                        reco_name.setText("Nearest: " + name + "\nDist: " + String.format("%.3f", smoothedDistance) + "\n2nd Nearest: " + nearest.get(1).first + "\nDist: " + String.format("%.3f", nearest.get(1).second));
-                    else
-                        reco_name.setText("Unknown " + "\nDist: " + String.format("%.3f", smoothedDistance) + "\nNearest: " + name + "\nDist: " + String.format("%.3f", smoothedDistance) + "\n2nd Nearest: " + nearest.get(1).first + "\nDist: " + String.format("%.3f", nearest.get(1).second));
+                    // Dùng giá trị trung bình thay vì distance_local
+                    float smoothedDistance = avgDistance;
+                    // ======================
+                    if (developerMode) {
+                        if (smoothedDistance < distance)
+                            reco_name.setText("Nearest: " + name + "\nDist: " + String.format("%.3f", smoothedDistance) + "\n2nd Nearest: " + nearest.get(1).first + "\nDist: " + String.format("%.3f", nearest.get(1).second));
+                        else
+                            reco_name.setText("Unknown " + "\nDist: " + String.format("%.3f", smoothedDistance) + "\nNearest: " + name + "\nDist: " + String.format("%.3f", smoothedDistance) + "\n2nd Nearest: " + nearest.get(1).first + "\nDist: " + String.format("%.3f", nearest.get(1).second));
 
-//                    System.out.println("nearest: " + name + " - distance: " + distance_local);
-                } else {
-                    if (smoothedDistance < distance)
-                        reco_name.setText(name);
-                    else
-                        reco_name.setText("Unknown");
-//                    System.out.println("nearest: " + name + " - distance: " + distance_local);
-                }
-
-
-            }
+    //                    System.out.println("nearest: " + name + " - distance: " + distance_local);
+                    } else {
+                        if (smoothedDistance < distance)
+                            reco_name.setText(name);
+                        else
+                            reco_name.setText("Unknown");
+    //                    System.out.println("nearest: " + name + " - distance: " + distance_local);
+                    }
                 }
             }
-
-
-//            final int numDetectionsOutput = 1;
-//            final ArrayList<SimilarityClassifier.Recognition> recognitions = new ArrayList<>(numDetectionsOutput);
-//            SimilarityClassifier.Recognition rec = new SimilarityClassifier.Recognition(
-//                    id,
-//                    label,
-//                    distance);
-//
-//            recognitions.add( rec );
-
+        }
     }
-//    public void register(String name, SimilarityClassifier.Recognition rec) {
-//        registered.put(name, rec);
-//    }
+
 
     //Compare Faces by distance between face embeddings
     private List<Pair<String, Float>> findNearest(float[] emb) {
@@ -1081,17 +959,6 @@ public class MainActivity extends AppCompatActivity {
         return retrievedMap;
     }
 
-
-    //Load Photo from phone storage
-    private void loadphoto()
-    {
-        start=false;
-        Intent intent = new Intent();
-        intent.setType("image/*");
-        intent.setAction(Intent.ACTION_GET_CONTENT);
-        startActivityForResult(Intent.createChooser(intent, "Select Picture"), SELECT_PICTURE);
-    }
-
     //Similar Analyzing Procedure
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
@@ -1169,14 +1036,20 @@ public class MainActivity extends AppCompatActivity {
         return image;
     }
 
-    private float[] getFaceEmbedding(Bitmap bitmap) {
+    private float[] extractEmbedding(Bitmap bitmap) {
         // Chuẩn bị bộ nhớ cho input
         ByteBuffer imgData = ByteBuffer.allocateDirect(1 * inputSize * inputSize * 3 * 4);
         imgData.order(ByteOrder.nativeOrder());
 
         int[] intValues = new int[inputSize * inputSize];
-        bitmap.getPixels(intValues, 0, bitmap.getWidth(), 0, 0,
-                bitmap.getWidth(), bitmap.getHeight());
+        try {
+            bitmap.getPixels(intValues, 0, bitmap.getWidth(), 0, 0, bitmap.getWidth(), bitmap.getHeight());
+        } catch (Exception e) {
+            Log.e("extractEmbedding", "getPixels() lỗi: " + e.getMessage());
+            return null;
+        }
+//        bitmap.getPixels(intValues, 0, bitmap.getWidth(), 0, 0,
+//                bitmap.getWidth(), bitmap.getHeight());
         imgData.rewind();
 
         // Chuẩn hóa ảnh (normalize)
