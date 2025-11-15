@@ -56,6 +56,7 @@ import androidx.lifecycle.LifecycleOwner;
 
 import android.os.ParcelFileDescriptor;
 import android.text.InputType;
+import android.util.Log;
 import android.util.Pair;
 import android.util.Size;
 import android.view.View;
@@ -78,13 +79,18 @@ import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
 import java.nio.ReadOnlyBufferException;
 import java.nio.channels.FileChannel;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+
+import mqtt.FaceProcessor;
+import mqtt.MqttManager;
 
 public class MainActivity extends AppCompatActivity {
     FaceDetector detector;
@@ -98,13 +104,13 @@ public class MainActivity extends AppCompatActivity {
     ImageButton add_face;
     CameraSelector cameraSelector;
     boolean developerMode=false;
-    float distance= 0.7f;
+    float distance= 0.65f;
     boolean start=true,flipX=false;
     Context context=MainActivity.this;
     int cam_face=CameraSelector.LENS_FACING_BACK; //Default Back Camera
 
     int[] intValues;
-    int inputSize=112;  //Input size for model
+    int inputSize= 112;  //Input size for model
     boolean isModelQuantized=false;
     float[][] embeedings;
     float IMAGE_MEAN = 128.0f;
@@ -113,7 +119,8 @@ public class MainActivity extends AppCompatActivity {
     private static int SELECT_PICTURE = 1;
     ProcessCameraProvider cameraProvider;
     private static final int MY_CAMERA_REQUEST_CODE = 100;
-
+    //
+    long lastRecognizedTime = 0;
     String modelFile="mobile_face_net.tflite"; //model name
 
     private HashMap<String, SimilarityClassifier.Recognition> registered = new HashMap<>(); //saved Faces
@@ -138,7 +145,73 @@ public class MainActivity extends AppCompatActivity {
         camera_switch=findViewById(R.id.button5);
         actions=findViewById(R.id.button2);
         textAbove_preview.setText("Recognized Face:");
-//        preview_info.setText("        Recognized Face:");
+        // preview_info.setText("        Recognized Face:");
+
+        // MQTT
+        FaceProcessor faceProcessor = new FaceProcessor(this);
+
+        MqttManager mqttManager = new MqttManager(
+                this,
+                "ssl://71e2c6502603479280eb36c1b5b12bfc.s1.eu.hivemq.cloud:8883",
+                "face/register",
+                "mqttnkq",
+                "Soict2025",
+                (name, bitmap) -> {
+                    // 🔹 Xử lý khuôn mặt trước khi embedding
+                    faceProcessor.process(bitmap, false, new FaceProcessor.OnProcessedListener() {
+                        @Override
+                        public void onFaceReady(Bitmap faceBitmap) {
+                            // 1️⃣ Tạo embedding từ khuôn mặt đã crop
+                            float[] embedding = getFaceEmbedding(faceBitmap);
+
+                            if (embedding == null) {
+                                Log.e("MQTT", "Không tạo được embedding cho ảnh: " + name);
+                                return;
+                            }
+                            // 2️⃣ Gói embedding vào Recognition object
+                            SimilarityClassifier.Recognition rec = new SimilarityClassifier.Recognition(
+                                    "0",
+                                    name,
+                                    -1f
+                            );
+
+                            // ✅ Gói lại embedding đúng định dạng float[1][OUTPUT_SIZE]
+                            float[][] embeddingWrapped = new float[1][embedding.length];
+                            embeddingWrapped[0] = embedding;
+
+                            // ✅ setExtra phải là float[1][N], KHÔNG phải float[]
+                            rec.setExtra(embeddingWrapped);
+
+                            // 3️⃣ Tạo HashMap chứa khuôn mặt mới
+                            HashMap<String, SimilarityClassifier.Recognition> newFace = new HashMap<>();
+                            newFace.put(name, rec);
+
+                            // 4️⃣ Lưu vào SharedPreferences (mode=2: update)
+                            insertToSP(newFace, 2);
+
+                            // 5️⃣ Hiển thị thông báo
+                            runOnUiThread(() ->
+                                    Toast.makeText(MainActivity.this,
+                                            "✅ Đã thêm khuôn mặt từ MQTT: " + name,
+                                            Toast.LENGTH_SHORT).show()
+                            );
+
+                            Log.d("MQTT", "✅ Đã thêm khuôn mặt: " + name);
+                        }
+
+                        @Override
+                        public void onNoFaceFound() {
+                            runOnUiThread(() ->
+                                    Toast.makeText(MainActivity.this,
+                                            "⚠ Không phát hiện khuôn mặt trong ảnh MQTT!",
+                                            Toast.LENGTH_SHORT).show()
+                            );
+                        }
+                    });
+                }
+        );
+        mqttManager.connect();
+
         //Camera Permission
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.CAMERA}, MY_CAMERA_REQUEST_CODE);
@@ -272,9 +345,6 @@ public class MainActivity extends AppCompatActivity {
         detector = FaceDetection.getClient(highAccuracyOpts);
 
         cameraBind();
-
-
-
     }
     private void testHyperparameter()
     {
@@ -481,7 +551,6 @@ public class MainActivity extends AppCompatActivity {
         builder.show();
     }
 
-
     private void displaynameListview()
     {
         AlertDialog.Builder builder = new AlertDialog.Builder(context);
@@ -668,10 +737,7 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-
         cameraProvider.bindToLifecycle((LifecycleOwner) this, cameraSelector, imageAnalysis, preview);
-
-
     }
 
     public void recognizeImage(final Bitmap bitmap) {
@@ -729,25 +795,37 @@ public class MainActivity extends AppCompatActivity {
         //Compare new face with saved Faces.
         if (registered.size() > 0) {
 
+            if (System.currentTimeMillis() - lastRecognizedTime > 800) {  // mỗi 0.8 giây mới nhận diện lại
+                lastRecognizedTime = System.currentTimeMillis();
             final List<Pair<String, Float>> nearest = findNearest(embeedings[0]);//Find 2 closest matching face
 
             if (nearest.get(0) != null) {
 
                 final String name = nearest.get(0).first; //get name and distance of closest matching face
-               // label = name;
+                // label = name;
                 distance_local = nearest.get(0).second;
-                if (developerMode)
-                {
-                    if(distance_local<distance)
-                        reco_name.setText("Nearest: "+name +"\nDist: "+ String.format("%.3f",distance_local)+"\n2nd Nearest: "+nearest.get(1).first +"\nDist: "+ String.format("%.3f",nearest.get(1).second));
+
+                // === Thêm đoạn này ===
+                Deque<Float> recentDistances = new ArrayDeque<>();
+                recentDistances.add(distance_local);
+                if (recentDistances.size() > 5) recentDistances.poll();
+
+                float avgDistance = 0f;
+                for (float d : recentDistances) avgDistance += d;
+                avgDistance /= recentDistances.size();
+
+                // Dùng giá trị trung bình thay vì distance_local
+                float smoothedDistance = avgDistance;
+                // ======================
+                if (developerMode) {
+                    if (smoothedDistance < distance)
+                        reco_name.setText("Nearest: " + name + "\nDist: " + String.format("%.3f", smoothedDistance) + "\n2nd Nearest: " + nearest.get(1).first + "\nDist: " + String.format("%.3f", nearest.get(1).second));
                     else
-                        reco_name.setText("Unknown "+"\nDist: "+String.format("%.3f",distance_local)+"\nNearest: "+name +"\nDist: "+ String.format("%.3f",distance_local)+"\n2nd Nearest: "+nearest.get(1).first +"\nDist: "+ String.format("%.3f",nearest.get(1).second));
+                        reco_name.setText("Unknown " + "\nDist: " + String.format("%.3f", smoothedDistance) + "\nNearest: " + name + "\nDist: " + String.format("%.3f", smoothedDistance) + "\n2nd Nearest: " + nearest.get(1).first + "\nDist: " + String.format("%.3f", nearest.get(1).second));
 
 //                    System.out.println("nearest: " + name + " - distance: " + distance_local);
-                }
-                else
-                {
-                    if(distance_local<distance)
+                } else {
+                    if (smoothedDistance < distance)
                         reco_name.setText(name);
                     else
                         reco_name.setText("Unknown");
@@ -755,7 +833,7 @@ public class MainActivity extends AppCompatActivity {
                 }
 
 
-
+            }
                 }
             }
 
@@ -781,9 +859,8 @@ public class MainActivity extends AppCompatActivity {
         Pair<String, Float> prev_ret = null; //to get second closest match
         for (Map.Entry<String, SimilarityClassifier.Recognition> entry : registered.entrySet())
         {
-
             final String name = entry.getKey();
-           final float[] knownEmb = ((float[][]) entry.getValue().getExtra())[0];
+            final float[] knownEmb = ((float[][]) entry.getValue().getExtra())[0];
 
             float distance = 0;
             for (int i = 0; i < emb.length; i++) {
@@ -1004,6 +1081,7 @@ public class MainActivity extends AppCompatActivity {
         return retrievedMap;
     }
 
+
     //Load Photo from phone storage
     private void loadphoto()
     {
@@ -1048,9 +1126,7 @@ public class MainActivity extends AppCompatActivity {
 
                                 //face_preview.setImageBitmap(frame_bmp1);
 
-
                                 RectF boundingBox = new RectF(face.getBoundingBox());
-
 
                                 Bitmap cropped_face = getCropBitmapByCPU(frame_bmp1, boundingBox);
 
@@ -1092,6 +1168,49 @@ public class MainActivity extends AppCompatActivity {
         parcelFileDescriptor.close();
         return image;
     }
+
+    private float[] getFaceEmbedding(Bitmap bitmap) {
+        // Chuẩn bị bộ nhớ cho input
+        ByteBuffer imgData = ByteBuffer.allocateDirect(1 * inputSize * inputSize * 3 * 4);
+        imgData.order(ByteOrder.nativeOrder());
+
+        int[] intValues = new int[inputSize * inputSize];
+        bitmap.getPixels(intValues, 0, bitmap.getWidth(), 0, 0,
+                bitmap.getWidth(), bitmap.getHeight());
+        imgData.rewind();
+
+        // Chuẩn hóa ảnh (normalize)
+        for (int i = 0; i < inputSize; ++i) {
+            for (int j = 0; j < inputSize; ++j) {
+                int pixelValue = intValues[i * inputSize + j];
+                if (isModelQuantized) {
+                    // Model dùng int8
+                    imgData.put((byte) ((pixelValue >> 16) & 0xFF));
+                    imgData.put((byte) ((pixelValue >> 8) & 0xFF));
+                    imgData.put((byte) (pixelValue & 0xFF));
+                } else {
+                    // Model float32
+                    imgData.putFloat((((pixelValue >> 16) & 0xFF) - IMAGE_MEAN) / IMAGE_STD);
+                    imgData.putFloat((((pixelValue >> 8) & 0xFF) - IMAGE_MEAN) / IMAGE_STD);
+                    imgData.putFloat(((pixelValue & 0xFF) - IMAGE_MEAN) / IMAGE_STD);
+                }
+            }
+        }
+
+        // Input và output cho model
+        Object[] inputArray = {imgData};
+        Map<Integer, Object> outputMap = new HashMap<>();
+
+        float[][] embeddings = new float[1][OUTPUT_SIZE];
+        outputMap.put(0, embeddings);
+
+        // Chạy model TensorFlow Lite
+        tfLite.runForMultipleInputsOutputs(inputArray, outputMap);
+
+        // embeddings[0] là vector đặc trưng của khuôn mặt
+        return embeddings[0];
+    }
+
 
 }
 
