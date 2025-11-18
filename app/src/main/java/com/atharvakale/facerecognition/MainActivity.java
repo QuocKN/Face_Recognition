@@ -38,6 +38,7 @@ import com.google.android.gms.tasks.OnCompleteListener;
 import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.android.gms.tasks.Task;
+import com.google.android.material.snackbar.Snackbar;
 import com.google.common.util.concurrent.ListenableFuture;
 
 
@@ -107,7 +108,7 @@ public class MainActivity extends AppCompatActivity {
     float distance= 0.65f;
     boolean start=true,flipX=false;
     Context context=MainActivity.this;
-    int cam_face=CameraSelector.LENS_FACING_BACK; //Default Back Camera
+    int cam_face=CameraSelector.LENS_FACING_FRONT; //Default Back Camera
 
     int[] intValues;
     int inputSize= 112;  //Input size for model
@@ -120,15 +121,24 @@ public class MainActivity extends AppCompatActivity {
     ProcessCameraProvider cameraProvider;
     private static final int MY_CAMERA_REQUEST_CODE = 100;
     //
+    SimilarityClassifier.Recognition recTmp = new SimilarityClassifier.Recognition(
+            "0",
+            "tmp",
+            -1f
+    );
     long lastRecognizedTime = 0;
     String modelFile="mobile_face_net.tflite"; //model name
 
-    private HashMap<String, SimilarityClassifier.Recognition> registered = new HashMap<>(); //saved Faces
+    private HashMap<String, List<SimilarityClassifier.Recognition>> registered = new HashMap<>(); //saved Faces
     @RequiresApi(api = Build.VERSION_CODES.M)
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         registered=readFromSP(); //Load saved faces from memory when app starts
+        runOnUiThread(()->
+                Toast.makeText(context, "Recognitions Loaded", Toast.LENGTH_SHORT).show()
+        );
+//        registered.putAll(readFromSP());
         setContentView(R.layout.activity_main);
         face_preview =findViewById(R.id.imageView);
         reco_name =findViewById(R.id.textView);
@@ -146,6 +156,7 @@ public class MainActivity extends AppCompatActivity {
         actions=findViewById(R.id.button2);
         textAbove_preview.setText("Recognized Face:");
         // preview_info.setText("        Recognized Face:");
+//        registered.putAll(readFromSP());
 
         // MQTT
         FaceProcessor faceProcessor = new FaceProcessor(this);
@@ -153,61 +164,48 @@ public class MainActivity extends AppCompatActivity {
         MqttManager mqttManager = new MqttManager(
                 this,
                 "ssl://71e2c6502603479280eb36c1b5b12bfc.s1.eu.hivemq.cloud:8883",
-                "face/register",
+                "server/device01/face_data",
                 "mqttnkq",
                 "Soict2025",
-                (name, bitmap) -> {
-                    // 🔹 Xử lý khuôn mặt trước khi embedding
-                    faceProcessor.process(bitmap, false, new FaceProcessor.OnProcessedListener() {
-                        @Override
-                        public void onFaceReady(Bitmap faceBitmap) {
-                            // 1️⃣ Tạo embedding từ khuôn mặt đã crop
-                            float[] embedding = extractEmbedding(faceBitmap);
+                (fullName, embedding) -> {
+                    // 2️⃣ Gói embedding vào Recognition object
+                    SimilarityClassifier.Recognition rec = new SimilarityClassifier.Recognition(
+                            "0",
+                            fullName,
+                            -1f
+                    );
 
-                            if (embedding == null) {
-                                Log.e("MQTT", "Không tạo được embedding cho ảnh: " + name);
-                                return;
-                            }
-                            // 2️⃣ Gói embedding vào Recognition object
-                            SimilarityClassifier.Recognition rec = new SimilarityClassifier.Recognition(
-                                    "0",
-                                    name,
-                                    -1f
-                            );
+                    // ✅ Gói lại embedding đúng định dạng float[1][OUTPUT_SIZE]
+                    float[][] embeddingWrapped = new float[1][embedding.length];
+                    embeddingWrapped[0] = embedding;
 
-                            // ✅ Gói lại embedding đúng định dạng float[1][OUTPUT_SIZE]
-                            float[][] embeddingWrapped = new float[1][embedding.length];
-                            embeddingWrapped[0] = embedding;
+                    // ✅ setExtra phải là float[1][N], KHÔNG phải float[]
+                    rec.setExtra(embeddingWrapped);
 
-                            // ✅ setExtra phải là float[1][N], KHÔNG phải float[]
-                            rec.setExtra(embeddingWrapped);
+                    // 3️⃣ Tạo HashMap chứa khuôn mặt mới
+                    HashMap<String, List<SimilarityClassifier.Recognition>> newFace = new HashMap<>();
+//                    newFace.put(fullName, rec);
 
-                            // 3️⃣ Tạo HashMap chứa khuôn mặt mới
-                            HashMap<String, SimilarityClassifier.Recognition> newFace = new HashMap<>();
-                            newFace.put(name, rec);
 
-                            // 4️⃣ Lưu vào SharedPreferences (mode=2: update)
-                            insertToSP(newFace, 2);
+                    // 5️⃣ Hiển thị thông báo
+//                    runOnUiThread(() ->
+//                            Toast.makeText(MainActivity.this,
+//                                    "✅ Đã thêm khuôn mặt từ MQTT: " + fullName,
+//                                    Toast.LENGTH_SHORT).show()
+//                    );
+                    Snackbar.make(findViewById(android.R.id.content),
+                                    "✅ Đã thêm khuôn mặt từ MQTT: " + fullName,
+                                    Snackbar.LENGTH_SHORT)
+                            .show();
 
-                            // 5️⃣ Hiển thị thông báo
-                            runOnUiThread(() ->
-                                    Toast.makeText(MainActivity.this,
-                                            "✅ Đã thêm khuôn mặt từ MQTT: " + name,
-                                            Toast.LENGTH_SHORT).show()
-                            );
-
-                            Log.d("MQTT", "✅ Đã thêm khuôn mặt: " + name);
-                        }
-
-                        @Override
-                        public void onNoFaceFound() {
-                            runOnUiThread(() ->
-                                    Toast.makeText(MainActivity.this,
-                                            "⚠ Không phát hiện khuôn mặt trong ảnh MQTT!",
-                                            Toast.LENGTH_SHORT).show()
-                            );
-                        }
-                    });
+                    // 4️⃣ Lưu vào SharedPreferences (mode=2: update)
+                    insertToSP(newFace, fullName, rec, 0);
+//                    insertToSP(registered,0);
+                    registered.putAll(readFromSP());
+//                    runOnUiThread(() ->
+//                            Toast.makeText(context, "Recognitions Saved", Toast.LENGTH_SHORT).show()
+//                    );
+                    Log.d("MQTT", "✅ Đã thêm khuôn mặt: " + fullName);
                 }
         );
         mqttManager.connect();
@@ -239,7 +237,7 @@ public class MainActivity extends AppCompatActivity {
                                 updatenameListview();
                                 break;
                             case 2:
-                                insertToSP(registered,0); //mode: 0:save all, 1:clear all, 2:update all
+                                insertToSP(registered, "xoa", recTmp, 0); //mode: 0:save all, 1:clear all, 2:update all
                                 break;
                             case 3:
                                 registered.putAll(readFromSP());
@@ -395,8 +393,8 @@ public class MainActivity extends AppCompatActivity {
                 SimilarityClassifier.Recognition result = new SimilarityClassifier.Recognition("0", name, -1f);
                 result.setExtra(wrapped);
 
-                registered.put(name, result);
-                insertToSP(registered, 2);
+//                registered.put(name, result);
+//                insertToSP(registered, 2);
 
                 Toast.makeText(context, "Đã lưu khuôn mặt: " + name, Toast.LENGTH_SHORT).show();
                 start = true;
@@ -424,7 +422,9 @@ public class MainActivity extends AppCompatActivity {
                 Toast.makeText(context, "Recognitions Cleared", Toast.LENGTH_SHORT).show();
             }
         });
-        insertToSP(registered,1);
+//        insertToSP(registered,1);
+        insertToSP(registered, "xoa", recTmp, 1); //mode: 0:save all, 1:clear all, 2:update all
+
         builder.setNegativeButton("Cancel",null);
         AlertDialog dialog = builder.create();
         dialog.show();
@@ -443,7 +443,7 @@ public class MainActivity extends AppCompatActivity {
         String[] names= new String[registered.size()];
         boolean[] checkedItems = new boolean[registered.size()];
          int i=0;
-                for (Map.Entry<String, SimilarityClassifier.Recognition> entry : registered.entrySet())
+                for (Map.Entry<String, List<SimilarityClassifier.Recognition>> entry : registered.entrySet())
                 {
                     //System.out.println("NAME"+entry.getKey());
                     names[i]=entry.getKey();
@@ -478,7 +478,8 @@ public class MainActivity extends AppCompatActivity {
                             }
 
                         }
-                insertToSP(registered,2); //mode: 0:save all, 1:clear all, 2:update all
+                insertToSP(registered, "", recTmp, 2);
+//                insertToSP(registered,2); //mode: 0:save all, 1:clear all, 2:update all
                 Toast.makeText(context, "Recognitions Updated", Toast.LENGTH_SHORT).show();
             }
         });
@@ -502,7 +503,7 @@ public class MainActivity extends AppCompatActivity {
         String[] names= new String[registered.size()];
         boolean[] checkedItems = new boolean[registered.size()];
         int i=0;
-        for (Map.Entry<String, SimilarityClassifier.Recognition> entry : registered.entrySet())
+        for (Map.Entry<String, List<SimilarityClassifier.Recognition>> entry : registered.entrySet())
         {
             //System.out.println("NAME"+entry.getKey());
             names[i]=entry.getKey();
@@ -731,33 +732,67 @@ public class MainActivity extends AppCompatActivity {
 
 
     //Compare Faces by distance between face embeddings
+//    private List<Pair<String, Float>> findNearest(float[] emb) {
+//        List<Pair<String, Float>> neighbour_list = new ArrayList<Pair<String, Float>>();
+//        Pair<String, Float> ret = null; //to get closest match
+//        Pair<String, Float> prev_ret = null; //to get second closest match
+//        for (Map.Entry<String, List<SimilarityClassifier.Recognition>> entry : registered.entrySet())
+//        {
+//            final String name = entry.getKey();
+//            final float[] knownEmb = ((float[][]) entry.getValue().getExtra())[0];
+//
+//            float distance = 0;
+//            for (int i = 0; i < emb.length; i++) {
+//                float diff = emb[i] - knownEmb[i];
+//                distance += diff*diff;
+//            }
+//            distance = (float) Math.sqrt(distance);
+//            if (ret == null || distance < ret.second) {
+//                prev_ret=ret;
+//                ret = new Pair<>(name, distance);
+//            }
+//        }
+//        if(prev_ret==null) prev_ret=ret;
+//        neighbour_list.add(ret);
+//        neighbour_list.add(prev_ret);
+//
+//        return neighbour_list;
+//
+//    }
     private List<Pair<String, Float>> findNearest(float[] emb) {
-        List<Pair<String, Float>> neighbour_list = new ArrayList<Pair<String, Float>>();
-        Pair<String, Float> ret = null; //to get closest match
-        Pair<String, Float> prev_ret = null; //to get second closest match
-        for (Map.Entry<String, SimilarityClassifier.Recognition> entry : registered.entrySet())
-        {
-            final String name = entry.getKey();
-            final float[] knownEmb = ((float[][]) entry.getValue().getExtra())[0];
+        List<Pair<String, Float>> neighbour_list = new ArrayList<>();
+        Pair<String, Float> ret = null;      // closest match
+        Pair<String, Float> prev_ret = null; // second closest match
 
-            float distance = 0;
-            for (int i = 0; i < emb.length; i++) {
-                float diff = emb[i] - knownEmb[i];
-                distance += diff*diff;
-            }
-            distance = (float) Math.sqrt(distance);
-            if (ret == null || distance < ret.second) {
-                prev_ret=ret;
-                ret = new Pair<>(name, distance);
+        for (Map.Entry<String, List<SimilarityClassifier.Recognition>> entry : registered.entrySet()) {
+            final String name = entry.getKey();
+            List<SimilarityClassifier.Recognition> recList = entry.getValue();
+
+            for (SimilarityClassifier.Recognition rec : recList) {
+                float[][] knownEmbArray = (float[][]) rec.getExtra();
+                if (knownEmbArray == null || knownEmbArray.length == 0) continue; // bỏ qua nếu null
+                float[] knownEmb = knownEmbArray[0];
+                float distance = 0f;
+                for (int i = 0; i < emb.length; i++) {
+                    float diff = emb[i] - knownEmb[i];
+                    distance += diff * diff;
+                }
+                distance = (float) Math.sqrt(distance);
+
+                if (ret == null || distance < ret.second) {
+                    prev_ret = ret;
+                    ret = new Pair<>(name, distance);
+                }
             }
         }
-        if(prev_ret==null) prev_ret=ret;
+
+        if (prev_ret == null) prev_ret = ret;
         neighbour_list.add(ret);
         neighbour_list.add(prev_ret);
 
         return neighbour_list;
-
     }
+
     public Bitmap getResizedBitmap(Bitmap bm, int newWidth, int newHeight) {
         int width = bm.getWidth();
         int height = bm.getHeight();
@@ -910,52 +945,120 @@ public class MainActivity extends AppCompatActivity {
         return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.length);
     }
 
-    //Save Faces to Shared Preferences.Conversion of Recognition objects to json string
-    private void insertToSP(HashMap<String, SimilarityClassifier.Recognition> jsonMap,int mode) {
-        if(mode==1)  //mode: 0:save all, 1:clear all, 2:update all
+//    //Save Faces to Shared Preferences.Conversion of Recognition objects to json string
+//    private void insertToSP(HashMap<String, SimilarityClassifier.Recognition> jsonMap,int mode) {
+//        if(mode==1)  //mode: 0:save all, 1:clear all, 2:update all
+//            jsonMap.clear();
+//        else if (mode==0)
+//            jsonMap.putAll(readFromSP());
+//        String jsonString = new Gson().toJson(jsonMap);
+////        for (Map.Entry<String, SimilarityClassifier.Recognition> entry : jsonMap.entrySet())
+////        {
+////            System.out.println("Entry Input "+entry.getKey()+" "+  entry.getValue().getExtra());
+////        }
+//        SharedPreferences sharedPreferences = getSharedPreferences("HashMap", MODE_PRIVATE);
+//        SharedPreferences.Editor editor = sharedPreferences.edit();
+//        editor.putString("map", jsonString);
+//        //System.out.println("Input josn"+jsonString.toString());
+//        editor.apply();
+////        runOnUiThread(() ->
+////                Toast.makeText(context, "Recognitions Saved", Toast.LENGTH_SHORT).show()
+////        );
+//    }
+    private void insertToSP(
+            HashMap<String, List<SimilarityClassifier.Recognition>> jsonMap, // toàn bộ map hiện tại
+            String name, // tên hoặc id của người
+            SimilarityClassifier.Recognition rec, // embedding mới muốn lưu
+            int mode // 0: save all, 1: clear all, 2: update all
+    ) {
+        if (mode == 1) {
             jsonMap.clear();
-        else if (mode==0)
-            jsonMap.putAll(readFromSP());
+        } else if (mode == 0) {
+            jsonMap.putAll(readFromSP()); // đọc map cũ từ SharedPreferences
+        }
+
+        // Lấy danh sách embeddings hiện tại của người này, nếu chưa có thì tạo mới
+        List<SimilarityClassifier.Recognition> list = jsonMap.getOrDefault(name, new ArrayList<>());
+        list.add(rec); // thêm embedding mới
+        jsonMap.put(name, list); // cập nhật lại map
+
+        // Chuyển map thành JSON và lưu vào SharedPreferences
         String jsonString = new Gson().toJson(jsonMap);
-//        for (Map.Entry<String, SimilarityClassifier.Recognition> entry : jsonMap.entrySet())
-//        {
-//            System.out.println("Entry Input "+entry.getKey()+" "+  entry.getValue().getExtra());
-//        }
         SharedPreferences sharedPreferences = getSharedPreferences("HashMap", MODE_PRIVATE);
         SharedPreferences.Editor editor = sharedPreferences.edit();
         editor.putString("map", jsonString);
-        //System.out.println("Input josn"+jsonString.toString());
         editor.apply();
-        Toast.makeText(context, "Recognitions Saved", Toast.LENGTH_SHORT).show();
     }
 
+
+
+
     //Load Faces from Shared Preferences.Json String to Recognition object
-    private HashMap<String, SimilarityClassifier.Recognition> readFromSP(){
+//    private HashMap<String, SimilarityClassifier.Recognition> readFromSP(){
+//        SharedPreferences sharedPreferences = getSharedPreferences("HashMap", MODE_PRIVATE);
+//        String defValue = new Gson().toJson(new HashMap<String, SimilarityClassifier.Recognition>());
+//        String json=sharedPreferences.getString("map",defValue);
+//
+//        TypeToken<HashMap<String,SimilarityClassifier.Recognition>> token = new TypeToken<HashMap<String,SimilarityClassifier.Recognition>>() {};
+//        HashMap<String,SimilarityClassifier.Recognition> retrievedMap=new Gson().fromJson(json,token.getType());
+//
+//        //So embeddings need to be extracted from it in required format(eg.double to float).
+//        for (Map.Entry<String, SimilarityClassifier.Recognition> entry : retrievedMap.entrySet())
+//        {
+//            float[][] output=new float[1][OUTPUT_SIZE];
+//            ArrayList arrayList= (ArrayList) entry.getValue().getExtra();
+//            arrayList = (ArrayList) arrayList.get(0);
+//            for (int counter = 0; counter < arrayList.size(); counter++) {
+//                output[0][counter]= ((Double) arrayList.get(counter)).floatValue();
+//            }
+//            entry.getValue().setExtra(output);
+//        }
+//        return retrievedMap;
+//    }
+    private HashMap<String, List<SimilarityClassifier.Recognition>> readFromSP() {
         SharedPreferences sharedPreferences = getSharedPreferences("HashMap", MODE_PRIVATE);
-        String defValue = new Gson().toJson(new HashMap<String, SimilarityClassifier.Recognition>());
-        String json=sharedPreferences.getString("map",defValue);
-       // System.out.println("Output json"+json.toString());
-        TypeToken<HashMap<String,SimilarityClassifier.Recognition>> token = new TypeToken<HashMap<String,SimilarityClassifier.Recognition>>() {};
-        HashMap<String,SimilarityClassifier.Recognition> retrievedMap=new Gson().fromJson(json,token.getType());
-       // System.out.println("Output map"+retrievedMap.toString());
+        // Xóa map cũ
+//        SharedPreferences.Editor editor = sharedPreferences.edit();
+//        editor.remove("map");
+//        editor.apply();
+        // Mặc định là map rỗng với List<Recognition>
+        String defValue = new Gson().toJson(new HashMap<String, List<SimilarityClassifier.Recognition>>());
+        String json = sharedPreferences.getString("map", defValue);
 
-        //During type conversion and save/load procedure,format changes(eg float converted to double).
-        //So embeddings need to be extracted from it in required format(eg.double to float).
-        for (Map.Entry<String, SimilarityClassifier.Recognition> entry : retrievedMap.entrySet())
-        {
-            float[][] output=new float[1][OUTPUT_SIZE];
-            ArrayList arrayList= (ArrayList) entry.getValue().getExtra();
-            arrayList = (ArrayList) arrayList.get(0);
-            for (int counter = 0; counter < arrayList.size(); counter++) {
-                output[0][counter]= ((Double) arrayList.get(counter)).floatValue();
+        TypeToken<HashMap<String, List<SimilarityClassifier.Recognition>>> token =
+                new TypeToken<HashMap<String, List<SimilarityClassifier.Recognition>>>() {};
+        HashMap<String, List<SimilarityClassifier.Recognition>> retrievedMap =
+                new Gson().fromJson(json, token.getType());
+
+        // Chuyển đổi extra từ ArrayList sang float[][] cho từng Recognition
+        for (Map.Entry<String, List<SimilarityClassifier.Recognition>> entry : retrievedMap.entrySet()) {
+            List<SimilarityClassifier.Recognition> list = entry.getValue();
+            for (SimilarityClassifier.Recognition rec : list) {
+                Object extra = rec.getExtra();
+                if (extra == null) {
+                    // nếu null, khởi tạo mảng rỗng để tránh crash
+                    rec.setExtra(new float[1][OUTPUT_SIZE]);
+                    continue;
+                }
+
+                // nếu extra vẫn là ArrayList (từ JSON mới lưu)
+                if (extra instanceof ArrayList) {
+                    ArrayList arrayList = (ArrayList) extra;
+                    if (arrayList.size() == 0 || arrayList.get(0) == null) {
+                        rec.setExtra(new float[1][OUTPUT_SIZE]);
+                        continue;
+                    }
+
+                    ArrayList firstList = (ArrayList) arrayList.get(0);
+                    float[][] output = new float[1][firstList.size()];
+                    for (int i = 0; i < firstList.size(); i++) {
+                        output[0][i] = ((Double) firstList.get(i)).floatValue();
+                    }
+                    rec.setExtra(output);
+                }
             }
-            entry.getValue().setExtra(output);
-
-            //System.out.println("Entry output "+entry.getKey()+" "+entry.getValue().getExtra() );
-
         }
-//        System.out.println("OUTPUT"+ Arrays.deepToString(outut));
-        Toast.makeText(context, "Recognitions Loaded", Toast.LENGTH_SHORT).show();
+
         return retrievedMap;
     }
 

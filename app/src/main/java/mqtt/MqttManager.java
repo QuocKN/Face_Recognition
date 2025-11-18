@@ -15,6 +15,7 @@ import org.eclipse.paho.client.mqttv3.MqttClient;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import info.mqtt.android.service.MqttAndroidClient;
@@ -29,10 +30,9 @@ public class MqttManager {
     private final String password;
 
     public interface MqttListener {
-        void onFaceReceived(String name, Bitmap faceBitmap);
+        void onFaceReceived(String fullName,  float[] embedding );
     }
 
-    // ✅ constructor cho HiveMQ Cloud (có username/password)
     public MqttManager(Context context, String brokerUrl, String topic,
                        String username, String password, MqttListener listener) {
         this.context = context;
@@ -58,7 +58,7 @@ public class MqttManager {
 
             @Override
             public void messageArrived(String topic, MqttMessage message) {
-                handleMessage(message.toString());
+                handleMessage(new String(message.getPayload()));
             }
 
             @Override
@@ -110,21 +110,39 @@ public class MqttManager {
 
     private void handleMessage(String json) {
         try {
-            JSONObject obj = new JSONObject(json);
-            String name = obj.getString("name");
-            String imageBase64 = obj.getString("image");
+            JSONArray arr = new JSONArray(json); // vì dữ liệu là mảng
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject obj = arr.getJSONObject(i);
+                String fullName = obj.getString("fullName");
+                String employeeCode = obj.getString("employeeCode");
+                String name_code = fullName + " - " + employeeCode;
 
-            byte[] decoded = Base64.decode(imageBase64, Base64.DEFAULT);
-            Bitmap bitmap = BitmapFactory.decodeByteArray(decoded, 0, decoded.length);
 
-            if (listener != null) {
-                listener.onFaceReceived(name, bitmap);
+                float[] embedding = null;
+                if (obj.has("embedding")) {
+                    embedding = jsonArrayToFloatArray(obj.getJSONArray("embedding"));
+                }
+
+                if (listener != null) {
+                    listener.onFaceReceived(name_code, embedding);
+                }
+
+                Log.d(TAG, "📥 Nhận data từ MQTT: " + fullName + " | code: " + employeeCode);
             }
 
-            Log.d(TAG, "📥 Nhận khuôn mặt từ MQTT: " + name);
 
         } catch (Exception e) {
             Log.e(TAG, "❌ Invalid MQTT message: " + json, e);
         }
     }
+
+
+    private float[] jsonArrayToFloatArray(org.json.JSONArray jsonArray) throws Exception {
+        float[] arr = new float[jsonArray.length()];
+        for (int i = 0; i < jsonArray.length(); i++) {
+            arr[i] = (float) jsonArray.getDouble(i);
+        }
+        return arr;
+    }
+
 }
