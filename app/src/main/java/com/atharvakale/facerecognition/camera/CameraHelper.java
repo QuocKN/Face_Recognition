@@ -26,13 +26,13 @@ import com.google.mlkit.vision.face.FaceDetection;
 import com.google.mlkit.vision.face.FaceDetector;
 import com.google.mlkit.vision.face.FaceDetectorOptions;
 
-import java.util.List;
 import java.util.concurrent.Executors;
 
 public class CameraHelper {
 
     public interface ResultCallback {
         void onResult(Bitmap bitmap, float[] embedding, String name);
+        void onFaceNotAligned(String reason);
     }
 
     private final Context context;
@@ -57,11 +57,15 @@ public class CameraHelper {
         this.callback = cb;
 
         classifier = new FaceClassifier(ctx);
-        detector = FaceDetection.getClient(
+
+        // Configure FaceDetector to get head angles
+        FaceDetectorOptions highAccuracyOpts =
                 new FaceDetectorOptions.Builder()
                         .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
-                        .build()
-        );
+                        .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
+                        .build();
+
+        detector = FaceDetection.getClient(highAccuracyOpts);
     }
 
     public void start() {
@@ -99,8 +103,8 @@ public class CameraHelper {
 
     @SuppressLint("UnsafeOptInUsageError")
     private void analyze(ImageProxy imageProxy) {
-        if (imageProxy == null || imageProxy.getImage() == null) {
-            if(imageProxy != null) imageProxy.close();
+        if (imageProxy.getImage() == null) {
+            if (imageProxy != null) imageProxy.close();
             return;
         }
 
@@ -112,30 +116,54 @@ public class CameraHelper {
                     if (faces.size() > 0) {
                         Face face = faces.get(0);
 
-                        Bitmap bitmap = previewView.getBitmap();
-                        if (bitmap == null) {
-                            return;
-                        }
+                        // Condition 1: Check head angles
+                        float eulerY = face.getHeadEulerAngleY(); // Yaw
+                        float eulerZ = face.getHeadEulerAngleZ(); // Roll
 
-                        try {
-                            RectF boundingBox = new RectF(face.getBoundingBox());
-                            Bitmap croppedBitmap = Bitmap.createBitmap(bitmap,
-                                    (int) boundingBox.left,
-                                    (int) boundingBox.top,
-                                    (int) boundingBox.width(),
-                                    (int) boundingBox.height());
+                        final float ANGLE_THRESHOLD = 12.0f;
+                        boolean isFaceStraight = Math.abs(eulerY) < ANGLE_THRESHOLD && Math.abs(eulerZ) < ANGLE_THRESHOLD;
 
-                            if (recognize) {
-                                float[] embedding = classifier.getEmbedding(croppedBitmap);
-                                Pair<String, Float> nearest = storage.findNearest(embedding);
-                                String name = nearest.first;
+                        // Condition 2: Check face size
+                        RectF boundingBox = new RectF(face.getBoundingBox());
+                        float faceWidth = boundingBox.width();
+                        float previewWidth = previewView.getWidth();
+                        boolean isFaceBigEnough = (previewWidth > 0) && (faceWidth / previewWidth) > 0.35f;
 
-                                if (callback != null) {
-                                    callback.onResult(croppedBitmap, embedding, name);
+                        String reason = "";
+                        if (!isFaceStraight) reason = "Vui lòng nhìn thẳng vào camera!";
+                        else if (!isFaceBigEnough) reason = "Vui lòng đưa mặt lại gần hơn!";
+
+                        if (isFaceStraight && isFaceBigEnough) {
+                            try {
+                                Bitmap bitmap = previewView.getBitmap();
+                                if (bitmap == null) return;
+
+                                Bitmap croppedBitmap = Bitmap.createBitmap(bitmap,
+                                        (int) boundingBox.left,
+                                        (int) boundingBox.top,
+                                        (int) boundingBox.width(),
+                                        (int) boundingBox.height());
+
+                                if (recognize) {
+                                    float[] embedding = classifier.getEmbedding(croppedBitmap);
+                                    Pair<String, Float> nearest = storage.findNearest(embedding);
+                                    String name = nearest.first;
+
+                                    if (callback != null) {
+                                        callback.onResult(croppedBitmap, embedding, name);
+                                    }
                                 }
+                            } catch(Exception e) {
+                                // ignore bitmap cropping errors
                             }
-                        } catch(Exception e) {
-                            // ignore errors related to bitmap cropping
+                        } else {
+                            if (callback != null) {
+                                callback.onFaceNotAligned(reason);
+                            }
+                        }
+                    } else {
+                         if (callback != null) {
+                            callback.onFaceNotAligned("Không tìm thấy khuôn mặt");
                         }
                     }
                 })
@@ -143,11 +171,9 @@ public class CameraHelper {
     }
 
     public void toggleCamera() {
-        if (camFace == CameraSelector.LENS_FACING_FRONT) {
-            camFace = CameraSelector.LENS_FACING_BACK;
-        } else {
-            camFace = CameraSelector.LENS_FACING_FRONT;
-        }
+        camFace = (camFace == CameraSelector.LENS_FACING_FRONT)
+                ? CameraSelector.LENS_FACING_BACK
+                : CameraSelector.LENS_FACING_FRONT;
         start();
     }
 }

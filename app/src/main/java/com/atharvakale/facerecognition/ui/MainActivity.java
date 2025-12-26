@@ -2,6 +2,7 @@ package com.atharvakale.facerecognition.ui;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.os.Bundle;
 import android.view.View;
 import android.widget.*;
@@ -17,7 +18,7 @@ import com.atharvakale.facerecognition.data.FaceStorage;
 import com.atharvakale.facerecognition.mqtt.MqttManager;
 import com.google.android.material.snackbar.Snackbar;
 
-public class MainActivity extends AppCompatActivity implements MqttManager.MqttListener {
+public class MainActivity extends AppCompatActivity implements MqttManager.MqttListener, CameraHelper.ResultCallback {
 
     private static final int CAMERA_REQ = 100;
 
@@ -36,6 +37,8 @@ public class MainActivity extends AppCompatActivity implements MqttManager.MqttL
     private FaceStorage faceStorage;
     private CameraHelper cameraHelper;
     private MqttManager mqttManager;
+    private Snackbar alignmentSnackbar;
+    private String lastAlignmentReason = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -51,17 +54,7 @@ public class MainActivity extends AppCompatActivity implements MqttManager.MqttL
         Button actionsBtn = findViewById(R.id.button2);
 
         faceStorage = new FaceStorage(this);
-
-        cameraHelper = new CameraHelper(
-                this,
-                previewView,
-                faceStorage,
-                (bitmap, embedding, name) -> {
-                    facePreview.setImageBitmap(bitmap);
-                    recoName.setText(name);
-                }
-        );
-
+        cameraHelper = new CameraHelper(this, previewView, faceStorage, this);
         mqttManager = new MqttManager(this, MQTT_BROKER_URL, MQTT_TOPIC, MQTT_USERNAME, MQTT_PASSWORD, this);
         mqttManager.connect();
 
@@ -82,8 +75,7 @@ public class MainActivity extends AppCompatActivity implements MqttManager.MqttL
                         .show()
         );
 
-        if (checkSelfPermission(Manifest.permission.CAMERA)
-                != PackageManager.PERMISSION_GRANTED) {
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_REQ);
         } else {
             cameraHelper.start();
@@ -91,15 +83,48 @@ public class MainActivity extends AppCompatActivity implements MqttManager.MqttL
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode,
-                                           @NonNull String[] permissions,
-                                           @NonNull int[] results) {
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] results) {
         super.onRequestPermissionsResult(requestCode, permissions, results);
         if (requestCode == CAMERA_REQ && results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
             cameraHelper.start();
         }
     }
 
+    // -- CameraHelper.ResultCallback --
+    @Override
+    public void onResult(Bitmap bitmap, float[] embedding, String name) {
+        runOnUiThread(() -> {
+            if (alignmentSnackbar != null && alignmentSnackbar.isShown()) {
+                alignmentSnackbar.dismiss();
+            }
+            lastAlignmentReason = ""; // Reset the reason
+            facePreview.setImageBitmap(bitmap);
+            recoName.setText(name);
+        });
+    }
+
+    @Override
+    public void onFaceNotAligned(String reason) {
+        runOnUiThread(() -> {
+            if (reason.equals(lastAlignmentReason) && alignmentSnackbar != null && alignmentSnackbar.isShown()) {
+                return; // Avoid updating if the message is the same and snackbar is visible
+            }
+
+            if (alignmentSnackbar == null) {
+                alignmentSnackbar = Snackbar.make(rootView, reason, Snackbar.LENGTH_INDEFINITE);
+            } else {
+                alignmentSnackbar.setText(reason);
+            }
+
+            if (!alignmentSnackbar.isShown()) {
+                alignmentSnackbar.show();
+            }
+
+            lastAlignmentReason = reason;
+        });
+    }
+
+    // -- MqttManager.MqttListener --
     @Override
     public void onFaceReceived(String fullName, float[] embedding) {
         if (embedding != null) {
@@ -109,15 +134,11 @@ public class MainActivity extends AppCompatActivity implements MqttManager.MqttL
 
     @Override
     public void onMqttConnected(String serverURI) {
-        runOnUiThread(() -> {
-            Snackbar.make(rootView, "Connected to: " + serverURI, Snackbar.LENGTH_LONG).show();
-        });
+        runOnUiThread(() -> Snackbar.make(rootView, "Connected to: " + serverURI, Snackbar.LENGTH_LONG).show());
     }
 
     @Override
     public void onDataReceived(String message) {
-        runOnUiThread(() -> {
-            Snackbar.make(rootView, message, Snackbar.LENGTH_LONG).show();
-        });
+        runOnUiThread(() -> Snackbar.make(rootView, message, Snackbar.LENGTH_LONG).show());
     }
 }
