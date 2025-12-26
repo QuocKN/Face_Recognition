@@ -1,9 +1,8 @@
-package mqtt;
+package com.atharvakale.facerecognition.mqtt;
 
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.RectF;
-import android.net.Uri;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
@@ -13,8 +12,6 @@ import com.google.mlkit.vision.face.Face;
 import com.google.mlkit.vision.face.FaceDetection;
 import com.google.mlkit.vision.face.FaceDetector;
 import com.google.mlkit.vision.face.FaceDetectorOptions;
-
-import java.util.List;
 
 public class FaceProcessor {
 

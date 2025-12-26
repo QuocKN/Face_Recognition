@@ -1,9 +1,6 @@
-package mqtt;
+package com.atharvakale.facerecognition.mqtt;
 
 import android.content.Context;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
-import android.util.Base64;
 import android.util.Log;
 
 import org.eclipse.paho.client.mqttv3.IMqttActionListener;
@@ -23,23 +20,19 @@ import info.mqtt.android.service.MqttAndroidClient;
 public class MqttManager {
     private final String TAG = "MqttManager";
     private final MqttAndroidClient mqttClient;
-    private final Context context;
     private final MqttListener listener;
     private final String topic;
-    private final String username;
-    private final String password;
 
     public interface MqttListener {
         void onFaceReceived(String fullName,  float[] embedding );
+        void onMqttConnected(String serverURI);
+        void onDataReceived(String message);
     }
 
     public MqttManager(Context context, String brokerUrl, String topic,
                        String username, String password, MqttListener listener) {
-        this.context = context;
         this.listener = listener;
         this.topic = topic;
-        this.username = username;
-        this.password = password;
 
         String clientId = MqttClient.generateClientId();
         mqttClient = new MqttAndroidClient(context, brokerUrl, clientId);
@@ -48,6 +41,9 @@ public class MqttManager {
             @Override
             public void connectComplete(boolean reconnect, String serverURI) {
                 Log.d(TAG, "✅ MQTT Connected to " + serverURI);
+                if (listener != null) {
+                    listener.onMqttConnected(serverURI);
+                }
                 subscribe(topic);
             }
 
@@ -64,10 +60,7 @@ public class MqttManager {
             @Override
             public void deliveryComplete(IMqttDeliveryToken token) {}
         });
-    }
 
-    // 🔹 kết nối MQTT qua SSL (port 8883)
-    public void connect() {
         try {
             MqttConnectOptions options = new MqttConnectOptions();
             options.setAutomaticReconnect(true);
@@ -80,8 +73,7 @@ public class MqttManager {
             mqttClient.connect(options, null, new IMqttActionListener() {
                 @Override
                 public void onSuccess(IMqttToken asyncActionToken) {
-                    Log.d(TAG, "✅ MQTT connected successfully");
-                    subscribe(topic);
+                    Log.d(TAG, "✅ MQTT connect action successful");
                 }
 
                 @Override
@@ -94,14 +86,13 @@ public class MqttManager {
         }
     }
 
+    public void connect() {
+        // Connection is now handled in the constructor
+    }
+
     private void subscribe(String topic) {
         try {
-            mqttClient.subscribe(topic, 1, new IMqttMessageListener() {
-                @Override
-                public void messageArrived(String topic, MqttMessage message) {
-                    handleMessage(message.toString());
-                }
-            });
+            mqttClient.subscribe(topic, 1, (t, message) -> handleMessage(new String(message.getPayload())));
             Log.d(TAG, "📡 Subscribed to " + topic);
         } catch (Exception e) {
             Log.e(TAG, "❌ Error subscribing MQTT", e);
@@ -110,13 +101,12 @@ public class MqttManager {
 
     private void handleMessage(String json) {
         try {
-            JSONArray arr = new JSONArray(json); // vì dữ liệu là mảng
+            JSONArray arr = new JSONArray(json);
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject obj = arr.getJSONObject(i);
                 String fullName = obj.getString("fullName");
                 String employeeCode = obj.getString("employeeCode");
                 String name_code = fullName + " - " + employeeCode;
-
 
                 float[] embedding = null;
                 if (obj.has("embedding")) {
@@ -125,24 +115,22 @@ public class MqttManager {
 
                 if (listener != null) {
                     listener.onFaceReceived(name_code, embedding);
+                    String notificationMessage = "📥 Nhận data từ MQTT: " + fullName + " | code: " + employeeCode;
+                    listener.onDataReceived(notificationMessage);
                 }
 
                 Log.d(TAG, "📥 Nhận data từ MQTT: " + fullName + " | code: " + employeeCode);
             }
-
-
         } catch (Exception e) {
             Log.e(TAG, "❌ Invalid MQTT message: " + json, e);
         }
     }
 
-
-    private float[] jsonArrayToFloatArray(org.json.JSONArray jsonArray) throws Exception {
+    private float[] jsonArrayToFloatArray(JSONArray jsonArray) throws Exception {
         float[] arr = new float[jsonArray.length()];
         for (int i = 0; i < jsonArray.length(); i++) {
             arr[i] = (float) jsonArray.getDouble(i);
         }
         return arr;
     }
-
 }
