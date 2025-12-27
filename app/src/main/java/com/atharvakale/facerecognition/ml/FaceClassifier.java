@@ -68,4 +68,32 @@ public class FaceClassifier {
         y.get(bytes);
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
     }
+
+    // --- Added helpers ---
+    // Returns the model input size (width==height)
+    public int getInputSize() {
+        return INPUT;
+    }
+
+    // Resize the provided face bitmap to the model input size. If the source has transparent
+    // corners (e.g. an elliptical crop), this method renders the source onto a solid white
+    // background before resizing so the model receives consistent RGB input.
+    public Bitmap resizeToModelInput(Bitmap src) {
+        if (src == null) return null;
+
+        // Create a square bitmap at model input size with white background
+        Bitmap out = Bitmap.createBitmap(INPUT, INPUT, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(out);
+        canvas.drawColor(Color.WHITE);
+
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+
+        // Draw the source bitmap scaled to fill the model input square
+        Rect srcRect = new Rect(0, 0, src.getWidth(), src.getHeight());
+        Rect dstRect = new Rect(0, 0, INPUT, INPUT);
+        canvas.drawBitmap(src, srcRect, dstRect, paint);
+
+        return out;
+    }
+
 }

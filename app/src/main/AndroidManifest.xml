@@ -25,5 +25,7 @@
     </application>
 
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Needed only for Android 9 and below when writing to external storage -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 
 </manifest>
