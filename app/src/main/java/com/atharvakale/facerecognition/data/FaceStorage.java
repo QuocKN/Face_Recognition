@@ -34,6 +34,37 @@ public class FaceStorage {
                 new TypeToken<HashMap<String, List<float[]>>>(){}.getType());
     }
 
+    /**
+     * Get all stored faces with their embedding counts
+     * @return Map of name -> number of embeddings
+     */
+    public HashMap<String, Integer> getAllFaces() {
+        HashMap<String, Integer> result = new HashMap<>();
+        HashMap<String, List<float[]>> raw = readRaw();
+        for (Map.Entry<String, List<float[]>> entry : raw.entrySet()) {
+            result.put(entry.getKey(), entry.getValue().size());
+        }
+        return result;
+    }
+
+    /**
+     * Get total number of unique faces stored
+     */
+    public int getFaceCount() {
+        return readRaw().size();
+    }
+
+    /**
+     * Get total number of embeddings stored (all faces combined)
+     */
+    public int getTotalEmbeddingCount() {
+        int total = 0;
+        for (List<float[]> embeddings : readRaw().values()) {
+            total += embeddings.size();
+        }
+        return total;
+    }
+
     public Pair<String, Float> findNearest(float[] emb) {
         float min = Float.MAX_VALUE;
         String best = "Unknown";

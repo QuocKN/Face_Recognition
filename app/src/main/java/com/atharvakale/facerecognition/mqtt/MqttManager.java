@@ -2,6 +2,7 @@ package com.atharvakale.facerecognition.mqtt;
 
 import android.content.Context;
 import android.util.Log;
+import android.widget.Toast;
 
 import org.eclipse.paho.client.mqttv3.IMqttActionListener;
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
@@ -40,7 +41,7 @@ public class MqttManager {
         mqttClient.setCallback(new MqttCallbackExtended() {
             @Override
             public void connectComplete(boolean reconnect, String serverURI) {
-                Log.d(TAG, "✅ MQTT Connected to " + serverURI);
+                Log.d(TAG, "✅ MQTT Connected");
                 if (listener != null) {
                     listener.onMqttConnected(serverURI);
                 }
@@ -101,28 +102,46 @@ public class MqttManager {
 
     private void handleMessage(String json) {
         try {
-            JSONArray arr = new JSONArray(json);
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject obj = arr.getJSONObject(i);
-                String fullName = obj.getString("fullName");
-                String employeeCode = obj.getString("employeeCode");
-                String name_code = fullName + " - " + employeeCode;
-
-                float[] embedding = null;
-                if (obj.has("embedding")) {
-                    embedding = jsonArrayToFloatArray(obj.getJSONArray("embedding"));
+            // Try to parse as JSON object first (single face data)
+            if (json.trim().startsWith("{")) {
+                JSONObject obj = new JSONObject(json);
+                processFaceData(obj);
+            }
+            // Try to parse as JSON array (multiple faces)
+            else if (json.trim().startsWith("[")) {
+                JSONArray arr = new JSONArray(json);
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject obj = arr.getJSONObject(i);
+                    processFaceData(obj);
                 }
-
-                if (listener != null) {
-                    listener.onFaceReceived(name_code, embedding);
-                    String notificationMessage = "📥 Nhận data từ MQTT: " + fullName + " | code: " + employeeCode;
-                    listener.onDataReceived(notificationMessage);
-                }
-
-                Log.d(TAG, "📥 Nhận data từ MQTT: " + fullName + " | code: " + employeeCode);
+            } else {
+                Log.e(TAG, "❌ Invalid JSON format (not object or array): " + json);
             }
         } catch (Exception e) {
-            Log.e(TAG, "❌ Invalid MQTT message: " + json, e);
+            Log.e(TAG, "❌ Error parsing MQTT message: " + json, e);
+        }
+    }
+
+    private void processFaceData(JSONObject obj) {
+        try {
+            String fullName = obj.getString("fullName");
+            String employeeCode = obj.getString("employeeCode");
+            String name_code = fullName + " - " + employeeCode;
+
+            float[] embedding = null;
+            if (obj.has("embedding")) {
+                embedding = jsonArrayToFloatArray(obj.getJSONArray("embedding"));
+            }
+
+            if (listener != null) {
+                listener.onFaceReceived(name_code, embedding);
+                String notificationMessage = "📥 Nhận data từ MQTT: " + fullName + " | code: " + employeeCode;
+                listener.onDataReceived(notificationMessage);
+            }
+
+            Log.d(TAG, "📥 Nhận data từ MQTT: " + fullName + " | code: " + employeeCode);
+        } catch (Exception e) {
+            Log.e(TAG, "❌ Error processing face data", e);
         }
     }
 
